@@ -422,6 +422,37 @@ class ParallelModuleTest(unittest.TestCase):
         self.assertFalse((self.state / 'parallel-presence-device.json').exists())
         self.assertFalse((self.state / '.presence').exists())
 
+    def test_continuity_malformed_id_type_error(self):
+        sys.path.insert(0, str(SCRIPTS))
+        from beyin_v3_continuity import resolve
+        
+        class DummyStore:
+            def __init__(self, d):
+                self.state_dir = Path(d)
+            def _records(self): return []
+            def _eligible(self, visibility, project, records): return records, []
+            def _superseded_ids(self, records): return set()
+
+        store = DummyStore(self.state)
+        session = 'test-crash'
+        harness = 'claude'
+        
+        folder = store.state_dir / 'topic-refs'
+        folder.mkdir(parents=True, exist_ok=True)
+        digest = hashlib.sha256((harness + '\0' + session).encode()).hexdigest()
+        path = folder / (digest + '.json')
+        
+        path.write_text(json.dumps({
+            "version": 1,
+            "at": time.time(),
+            "project": None,
+            "refs": [{"id": ["list", "unhashable"]}]
+        }))
+        
+        local = "local"
+        res = resolve(store, harness, session, "bunu devam ettir", local, budget_chars=1000)
+        self.assertEqual(res, (local, False))
+
 
 if __name__ == '__main__':
     unittest.main()

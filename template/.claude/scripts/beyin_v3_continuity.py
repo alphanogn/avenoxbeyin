@@ -101,7 +101,7 @@ def resolve(store, harness, session, query, local, *, budget_chars, project=None
         return local, False
     try:
         records = _current(store, saved)
-    except (ValueError, OSError):
+    except (ValueError, OSError, TypeError):
         return local, False
     if not records:
         return local, False
