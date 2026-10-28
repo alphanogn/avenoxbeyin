@@ -240,8 +240,14 @@ def migration_guard(vault_root, state_dir):
         # Runners the user kept at install time stay theirs on every later update.
         manifest = state/'v3-install.json'
         if manifest.exists():
-            kept = json.loads(manifest.read_text(encoding='utf-8')).get('kept_legacy', [])
-            if kept:
+            try:
+                manifest_data = json.loads(manifest.read_text(encoding='utf-8'))
+                if not isinstance(manifest_data, dict):
+                    manifest_data = {}
+            except (ValueError, UnicodeError):
+                manifest_data = {}
+            kept = manifest_data.get('kept_legacy', [])
+            if isinstance(kept, list) and kept:
                 plan['kept_legacy'] = sorted(kept)
         yield plan
 
