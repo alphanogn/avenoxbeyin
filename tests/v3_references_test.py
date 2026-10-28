@@ -103,6 +103,16 @@ class ReferencesTest(unittest.TestCase):
             '']))
         self.assertEqual(self.dead(), [('AGENTS.md', 2, missing.as_posix())])
 
+    def test_a_leading_slash_target_outside_the_vault_that_does_not_exist_is_still_dead(self):
+        """A leading slash is also a vault-root link, so a target found nowhere stays dead.
+
+        This is the documented limit: only the leading-slash spelling reaches here, and a path that
+        names a file on another machine is reported rather than skipped."""
+        missing = self.vault.parent / 'olmayan' / 'not.md'
+        self.assertFalse(missing.exists())
+        self.write('AGENTS.md', '[not](<%s>)\n' % missing.as_posix())
+        self.assertEqual(self.dead(), [('AGENTS.md', 1, missing.as_posix())])
+
     def test_a_relative_link_that_resolves_to_nothing_is_still_dead(self):
         """Absolute paths are skipped only where they leave the vault; the vault check still works."""
         self.write('AGENTS.md', '[rehber](docs/yok.md)\n[[knowledge/concepts/Taşınmış Not]]\n')
