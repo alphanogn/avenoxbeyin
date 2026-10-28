@@ -2,6 +2,7 @@
 """Offline lifecycle, queue and installer tests using isolated synthetic homes."""
 import importlib.util
 import base64
+import errno
 import hashlib
 import re
 import json
@@ -1463,6 +1464,173 @@ class HookFailOpenTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('Runtime state must be outside vault', result.stderr.decode())
         self.assertFalse(inside.exists())
+
+
+class HookReadOnlyStateTest(unittest.TestCase):
+    """A client can run its hook commands without write access to the runtime state.
+
+    Some harnesses sandbox lifecycle commands (a Seatbelt workspace-write profile, a read-only
+    home): the vault stays readable, the state folder refuses the queue write and the worker
+    spawn. The turn still has to answer, and the previous committed index is readable, so the
+    context comes from there with a one-line note instead of the #417 sync failure notice.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix='v3-read-only-state-test-')
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.vault = self.root / 'vault'
+        self.state = self.root / 'state'
+        self.vault.mkdir()
+        self.state.mkdir()
+        self.env = inherited_env()
+        self.env['BEYIN_V3_NO_SPAWN'] = '1'
+
+    def seed(self):
+        """Commit one synthetic source while the state is still writable."""
+        note = self.vault / 'notes' / 'task.md'
+        note.parent.mkdir(parents=True)
+        note.write_text('---\n' + json.dumps({'id': 'nebula-task', 'kind': 'task', 'revision': 1,
+                                              'project': 'nebula', 'status': 'active',
+                                              'visibility': 'internal'}) +
+                        '\n---\nNebula calibration owner is Synthetic Reviewer.\n', encoding='utf-8')
+        result = subprocess.run([sys.executable, str(ROOT / 'scripts/beyin_v3.py'), '--vault', str(self.vault),
+                                 '--state', str(self.state), 'sync'], capture_output=True, env=self.env, timeout=120)
+        self.assertEqual(result.returncode, 0, result.stderr.decode(errors='replace'))
+
+    def run_hook(self, payload, *extra, script=None, env=None):
+        return subprocess.run([sys.executable, str(script or HOOK), '--vault', str(self.vault),
+                               '--state', str(self.state), '--harness', 'claude', *extra],
+                              input=json.dumps(payload), text=True, encoding='utf-8', capture_output=True,
+                              cwd=str(self.vault), env=env or self.env, timeout=60)
+
+    def context(self, result):
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return json.loads(result.stdout)['hookSpecificOutput']['additionalContext']
+
+    def deny_state_writes(self):
+        self.state.chmod(0o555)
+        self.addCleanup(self.state.chmod, 0o755)
+
+    @unittest.skipIf(os.name == 'nt' or (hasattr(os, 'geteuid') and os.geteuid() == 0),
+                     'a read-only folder needs POSIX permissions and a non-root user')
+    def test_indexed_read_only_state_answers_from_the_previous_index(self):
+        self.seed()
+        self.deny_state_writes()
+        context = self.context(self.run_hook({'hook_event_name': 'UserPromptSubmit', 'session_id': 'ro-indexed',
+                                              'event_id': 'ro-indexed-1', 'cwd': str(self.vault),
+                                              'prompt': 'Nebula calibration owner'}))
+        self.assertIn('Synthetic Reviewer', context)
+        self.assertIn('state folder is not writable', context)
+        self.assertIn('previous index', context)
+        self.assertEqual(context.count('state folder is not writable'), 1)
+        self.assertNotIn('failed or conflicted', context)
+        self.assertFalse((self.state / 'hook-error.json').exists())
+
+    @unittest.skipIf(os.name == 'nt' or (hasattr(os, 'geteuid') and os.geteuid() == 0),
+                     'a read-only folder needs POSIX permissions and a non-root user')
+    def test_read_only_note_survives_a_turn_without_matches(self):
+        # Per-turn retrieval is strict and an empty match injects nothing, but the reason it cannot
+        # be refreshed is not a search result: the one-line note still reaches the turn.
+        self.seed()
+        self.deny_state_writes()
+        context = self.context(self.run_hook({'hook_event_name': 'UserPromptSubmit', 'session_id': 'ro-nomatch',
+                                              'event_id': 'ro-nomatch-1', 'cwd': str(self.vault),
+                                              'prompt': 'quasar telemetry'}))
+        self.assertIn('state folder is not writable', context)
+        self.assertNotIn('Synthetic Reviewer', context)
+
+    @unittest.skipIf(os.name == 'nt' or (hasattr(os, 'geteuid') and os.geteuid() == 0),
+                     'a read-only folder needs POSIX permissions and a non-root user')
+    def test_read_only_state_without_an_index_keeps_the_sync_failure_notice(self):
+        # Nothing was ever indexed, so there is no context to fall back to: #417 still names the
+        # failure instead of pretending a previous index answered.
+        self.deny_state_writes()
+        context = self.context(self.run_hook({'hook_event_name': 'UserPromptSubmit', 'session_id': 'ro-empty',
+                                              'event_id': 'ro-empty-1', 'cwd': str(self.vault),
+                                              'prompt': 'Nebula calibration owner'}))
+        self.assertIn('V3 source sync failed', context)
+        self.assertIn('cannot run in this client', context)
+        self.assertNotIn('this context comes from the previous index', context)
+        self.assertFalse((self.state / 'hook-error.json').exists())
+
+    @unittest.skipIf(os.name == 'nt' or (hasattr(os, 'geteuid') and os.geteuid() == 0),
+                     'a read-only folder needs POSIX permissions and a non-root user')
+    def test_stop_in_a_read_only_state_stays_empty(self):
+        # Stop never carries context, a refused state write included: the fail-open answer is {}.
+        self.seed()
+        self.deny_state_writes()
+        result = self.run_hook({'hook_event_name': 'Stop', 'session_id': 'ro-stop', 'event_id': 'ro-stop-1',
+                                'cwd': str(self.vault)})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), {})
+
+    def refused_spawn_hook(self):
+        """The real hook where the sandbox refuses to start the sync worker."""
+        wrapper = self.root / 'refused_spawn_hook.py'
+        wrapper.write_text(f'''import runpy, subprocess, sys
+sys.path.insert(0, {str(SCRIPTS)!r})
+import beyin_v3_preferences
+beyin_v3_preferences.claim_check = lambda *args, **kwargs: True
+def refused(*args, **kwargs):
+    raise PermissionError(1, 'Operation not permitted')
+subprocess.Popen = refused
+sys.argv[0] = {str(HOOK)!r}
+runpy.run_path({str(HOOK)!r}, run_name='__main__')
+''', encoding='utf-8')
+        return wrapper
+
+    def test_refused_worker_spawn_falls_back_to_the_previous_index(self):
+        self.seed()
+        env = dict(self.env)
+        env.pop('BEYIN_V3_NO_SPAWN', None)
+        context = self.context(self.run_hook({'hook_event_name': 'UserPromptSubmit', 'session_id': 'ro-spawn',
+                                              'event_id': 'ro-spawn-1', 'cwd': str(self.vault),
+                                              'prompt': 'Nebula calibration owner'},
+                                             script=self.refused_spawn_hook(), env=env))
+        self.assertIn('Synthetic Reviewer', context)
+        self.assertIn('could not start its sync worker', context)
+        self.assertFalse((self.state / 'hook-error.json').exists())
+
+    def failed_enqueue_hook(self, code, label):
+        """The real hook where enqueueing fails with an error that is not a permission refusal."""
+        wrapper = self.root / f'{label}_hook.py'
+        wrapper.write_text(f'''import importlib.util, sys
+sys.path.insert(0, {str(SCRIPTS)!r})
+sys.argv = [{str(HOOK)!r}] + sys.argv[1:]
+spec = importlib.util.spec_from_file_location('hook_under_test', {str(HOOK)!r})
+hook = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(hook)
+def refused(*args, **kwargs):
+    raise OSError({code}, {label!r})
+hook.enqueue_event = refused
+hook.main()
+''', encoding='utf-8')
+        return wrapper
+
+    def test_non_permission_write_failure_keeps_the_417_notice(self):
+        # A full disk is a real sync failure, not a read-only client: it must not claim that a
+        # previous index answered, and it must not take the refusal note.
+        self.seed()
+        context = self.context(self.run_hook({'hook_event_name': 'UserPromptSubmit', 'session_id': 'full-disk',
+                                              'event_id': 'full-disk-1', 'cwd': str(self.vault),
+                                              'prompt': 'Nebula calibration owner'},
+                                             script=self.failed_enqueue_hook(errno.ENOSPC, 'enospc')))
+        self.assertIn('V3 source sync failed', context)
+        self.assertNotIn('state folder is not writable', context)
+        self.assertNotIn('Synthetic Reviewer', context)
+
+    def test_write_refusal_classification_keeps_other_failures(self):
+        # Only the refusals that leave the existing index readable take the read-only path; a full
+        # disk, a missing path or a non-OS error must still reach the #417 handler.
+        hook = load_hook()
+        for code in (errno.EPERM, errno.EACCES, errno.EROFS):
+            with self.subTest(errno=code):
+                self.assertTrue(hook.permission_refused(PermissionError(code, os.strerror(code))))
+        for code in (errno.ENOSPC, errno.ENOENT, errno.EIO, errno.EBUSY):
+            with self.subTest(errno=code):
+                self.assertFalse(hook.permission_refused(OSError(code, os.strerror(code))))
+        self.assertFalse(hook.permission_refused(RuntimeError('synthetic')))
 
 
 if __name__ == '__main__':
