@@ -384,5 +384,90 @@ class IngestServerTest(unittest.TestCase):
             self.assertEqual(resp.status, 200)
 
 
+
+    def test_malformed_utf8_request_line_returns_400(self):
+        import socket
+        import threading
+        server = ingest_server.create_server(self.vault, port=0)
+        port = server.server_address[1]
+        t = threading.Thread(target=server.serve_forever, daemon=True)
+        t.start()
+        self.addCleanup(lambda: (server.shutdown(), server.server_close(), t.join(2)))
+
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.connect(("127.0.0.1", port))
+        
+        # Send raw invalid bytes at the HTTP request boundary.
+        # It should trigger UnicodeDecodeError inside base handle_one_request 
+        # and be caught by our custom handle() which will return 400 Bad Request.
+        s.sendall(b"\xff\xfe\xfa\r\n\r\n")
+        
+        # We must receive a response instead of an abrupt close (empty string).
+        response = b""
+        try:
+            
+                while True:
+                    chunk = s.recv(1024)
+                    if not chunk: break
+                    response += chunk
+
+        except OSError:
+            pass
+        finally:
+            s.close()
+            
+        self.assertIn(b"400", response)
+
+
+
+    def test_malformed_requests_and_content_length_resilience(self):
+        import socket
+        import threading
+        server = ingest_server.create_server(self.vault, port=0)
+        port = server.server_address[1]
+        t = threading.Thread(target=server.serve_forever, daemon=True)
+        t.start()
+        self.addCleanup(lambda: (server.shutdown(), server.server_close(), t.join(2)))
+
+        def send_and_receive(payload):
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.connect(("127.0.0.1", port))
+            s.sendall(payload)
+            response = b""
+            try:
+                
+                while True:
+                    chunk = s.recv(1024)
+                    if not chunk: break
+                    response += chunk
+
+            except OSError:
+                pass
+            finally:
+                s.close()
+            return response
+
+        # 1. Non-numeric Content-Length
+        response = send_and_receive(b"POST /ingest HTTP/1.1\r\nContent-Length: not-a-number\r\n\r\n")
+        self.assertIn(b"400", response)
+        self.assertIn(b"Invalid Content-Length", response)
+
+        # 2. Negative Content-Length
+        response = send_and_receive(b"POST /ingest HTTP/1.1\r\nContent-Length: -50\r\n\r\n")
+        self.assertIn(b"400", response)
+        self.assertIn(b"Negative Content-Length", response)
+
+        # 3. Payload Too Large
+        response = send_and_receive(b"POST /ingest HTTP/1.1\r\nContent-Length: 2000000\r\n\r\n")
+        self.assertIn(b"413", response)
+        self.assertIn(b"Payload exceeds", response)
+
+        # 4. Invalid JSON Payload
+        payload = b'{"text": "incomplete'
+        response = send_and_receive(b"POST /ingest HTTP/1.1\r\nContent-Type: application/json\r\nContent-Length: " + str(len(payload)).encode() + b"\r\n\r\n" + payload)
+        self.assertIn(b"400", response)
+        self.assertIn(b"Malformed JSON", response)
+
+
 if __name__ == '__main__':
     unittest.main()
