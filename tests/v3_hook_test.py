@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -15,6 +16,7 @@ import time
 import unittest
 from unittest.mock import patch
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
 from v3_package_helpers import clean_environ, inherited_env, isolated_path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -1266,6 +1268,27 @@ runpy.run_path({str(HOOK)!r}, run_name='__main__')
 ''', encoding='utf-8')
         self.env.pop('BEYIN_V3_NO_SPAWN', None)
         return wrapper
+
+    def test_locked_cadence_record_still_answers_the_turn_and_names_the_skip(self):
+        # Another client holds BEGIN IMMEDIATE on the cadence record. The turn keeps its context
+        # and records no hook error, and the notice names the unwritable record instead of
+        # reporting an interval preference the user never chose.
+        self.seed()
+        import beyin_v3_preferences as preferences
+        preferences.save(self.vault, {'interval_minutes': 15})
+        self.assertTrue(preferences.claim_check(self.state, preferences.read(self.vault), 'SessionStart'))
+        self.env.pop('BEYIN_V3_NO_SPAWN', None)
+        with closing(sqlite3.connect(self.state / 'check-cadence.sqlite3', timeout=0)) as holder, holder:
+            holder.execute('BEGIN IMMEDIATE')
+            payload = {'hook_event_name': 'UserPromptSubmit', 'session_id': 'locked-cadence',
+                       'event_id': 'locked-cadence-1', 'cwd': str(self.vault),
+                       'prompt': 'Nebula calibration owner'}
+            context = self.invoke(payload, 'claude')['hookSpecificOutput']['additionalContext']
+        self.assertIn('Synthetic Reviewer', context)
+        self.assertIn('cadence record could not be written', context)
+        self.assertIn('doctor', context)
+        self.assertNotIn('deferred by your interval preference', context)
+        self.assertFalse((self.state / 'hook-error.json').exists())
 
     def test_user_prompt_submit_reads_previous_index_when_check_is_deferred(self):
         # Issue #398: context_mode: turn with interval_minutes > 0 used to drop context entirely.

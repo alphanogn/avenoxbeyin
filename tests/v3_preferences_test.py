@@ -279,6 +279,21 @@ class PreferencesTest(unittest.TestCase):
         # The released lock leaves a usable record: the next due check still claims it.
         self.assertTrue(prefs.claim_check(self.state, settings, 'Stop', now=1900))
 
+    def test_skip_reason_separates_a_refusal_from_the_interval_preference(self):
+        # A permanent refusal must not read as the user's own interval setting, so the caller
+        # learns which of the two skipped the check.
+        settings = prefs.PROFILES['economical']
+        reason = []
+        self.assertTrue(prefs.claim_check(self.state, settings, 'SessionStart', now=1000, skip_reason=reason))
+        self.assertEqual(reason, [])
+        self.assertFalse(prefs.claim_check(self.state, settings, 'Stop', now=1001, skip_reason=reason))
+        self.assertEqual(reason, [prefs.SKIP_INTERVAL])
+        reason.clear()
+        with closing(sqlite3.connect(self.state / 'check-cadence.sqlite3', timeout=0)) as holder, holder:
+            holder.execute('BEGIN IMMEDIATE')
+            self.assertFalse(prefs.claim_check(self.state, settings, 'Stop', now=1002, skip_reason=reason))
+        self.assertEqual(reason, [prefs.SKIP_REFUSED])
+
     def test_damaged_cadence_schema_stays_visible(self):
         # Only locks and write refusals are skipped. A broken cadence table must fail loudly
         # instead of silently disabling the interval for good.

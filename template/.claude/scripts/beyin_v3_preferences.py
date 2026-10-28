@@ -118,6 +118,11 @@ _REFUSED_ERRNOS = frozenset(code for code in (
     errno.EACCES, errno.EPERM, errno.EROFS, errno.ENOSPC,
     getattr(errno, 'EDQUOT', None)) if code is not None)
 
+# Why a check did not run: the user's interval has not elapsed, or the record could not be
+# written. They need different notices -- a refusal that repeats must not read as a preference.
+SKIP_INTERVAL = 'interval'
+SKIP_REFUSED = 'refused'
+
 
 def _cadence_write_refused(exc):
     if isinstance(exc, OSError):
@@ -129,7 +134,7 @@ def _cadence_write_refused(exc):
     return code is not None and (code & 0xFF) in _REFUSED_SQLITE_CODES
 
 
-def claim_check(state, settings, event, now=None):
+def claim_check(state, settings, event, now=None, skip_reason=None):
     """Atomically rate-limit automatic launches, across clients, not manual CLI reads.
 
     A new session always refreshes. The interval is a minimum between subsequent
@@ -139,9 +144,19 @@ def claim_check(state, settings, event, now=None):
     turn's automatic check instead of failing: the turn still reads the previous index, and
     no hook error replaces its context. Only refusals skip; any other SQLite error still
     surfaces, and #417 keeps its notice for a worker that genuinely failed.
+
+    `skip_reason` is an optional list the caller passes to tell the two skips apart: it
+    receives `SKIP_INTERVAL` or `SKIP_REFUSED`, and stays empty when the check runs. A
+    refusal that keeps repeating is a broken record, not a chosen interval, and the turn
+    has to say so.
     """
-    if not settings['auto_sync']:
+    def skip(reason):
+        if skip_reason is not None:
+            skip_reason.append(reason)
         return False
+
+    if not settings['auto_sync']:
+        return skip(SKIP_INTERVAL)
     if not settings['interval_minutes']:
         return True
     now = time.time() if now is None else now
@@ -154,10 +169,10 @@ def claim_check(state, settings, event, now=None):
             row = db.execute('SELECT started FROM cadence WHERE id=1').fetchone()
             retry = (state / 'hook-error.json').exists()
             if event != 'SessionStart' and not retry and row and 0 <= now-row[0] < settings['interval_minutes']*60:
-                return False
+                return skip(SKIP_INTERVAL)
             db.execute('INSERT OR REPLACE INTO cadence VALUES (1, ?)', (now,))
     except (OSError, sqlite3.OperationalError) as exc:
         if not _cadence_write_refused(exc):
             raise
-        return False
+        return skip(SKIP_REFUSED)
     return True

@@ -512,7 +512,7 @@ def main():
     if state == vault or vault in state.parents:
         raise ValueError("Runtime state must be outside vault")
     os.umask(0o077)
-    from beyin_v3_preferences import read, claim_check
+    from beyin_v3_preferences import read, claim_check, SKIP_REFUSED
     if args.worker or args.drain_queue:
         if args.worker and not read(vault)['auto_sync']:
             print(json.dumps({'processed': 0, 'failed': 0, 'paused': True}))
@@ -620,7 +620,16 @@ def main():
         else:
             options["start_new_session"] = True
         disabled = os.environ.get("BEYIN_V3_NO_SPAWN") == "1"
-        due = False if disabled else claim_check(state, settings, event)
+        cadence_skip = []
+        due = False if disabled else claim_check(state, settings, event, skip_reason=cadence_skip)
+        # Two different causes skip a check: the interval has not elapsed, or the cadence record
+        # could not be written. A record that stays unwritable (locked or read-only) must not
+        # read as an interval the user chose, so the notice names it and points at doctor.
+        refused = SKIP_REFUSED in cadence_skip
+        skip_notice = ('V3 automatic check skipped: the cadence record could not be written (locked or read-only)'
+                       if refused else 'V3 automatic check deferred by your interval preference')
+        # A refusal repeats until someone looks; an elapsed interval is expected and needs no advice.
+        skip_hint = ' Run beyin.py doctor if this repeats.' if refused else ''
         process = subprocess.Popen(command, **options) if due else None
         # After enqueue, so reminder bookkeeping can never cost the queued checkpoint.
         # The global bridge (--metadata-only) discards stdout, so it keeps no reminder state.
@@ -662,7 +671,7 @@ def main():
                 except ValueError:
                     msg = ("V3 source sync is pending. Verify current Markdown sources before using prior context."
                            if pending else
-                           "V3 automatic check deferred by your interval preference. Read current sources or use beyin.py context for fresh information.")
+                           skip_notice + ". Read current sources or use beyin.py context for fresh information." + skip_hint)
                     print(json.dumps(output_context(args.harness, event, notice + msg)))
                     return
             else:
@@ -675,8 +684,8 @@ def main():
                 warning = ('V3 source sync is still running; this context comes from the previous index. '
                            'Verify current Markdown sources before relying on it.\n')
             elif deferred:
-                warning = ('V3 automatic check deferred by your interval preference; this context comes from the previous index. '
-                           'Read current sources or use beyin.py context for fresh information.\n')
+                warning = (skip_notice + '; this context comes from the previous index. '
+                           'Read current sources or use beyin.py context for fresh information.' + skip_hint + '\n')
             else:
                 warning = ''
             health = state / "hook-health.json"
@@ -814,7 +823,9 @@ def main():
             # worker is not failing, so keep the pending/deferred notice and record no hook error.
             msg = ("V3 source sync is pending. Verify current Markdown sources before using prior context."
                    if locals().get("pending") is True else
-                   "V3 automatic check deferred by your interval preference. Read current sources or use beyin.py context for fresh information.")
+                   (locals().get("skip_notice") or 'V3 automatic check deferred by your interval preference') +
+                   ". Read current sources or use beyin.py context for fresh information." +
+                   str(locals().get("skip_hint") or ''))
             print(json.dumps(output_context(args.harness, event, notice + msg)))
             return
         record_error(state, exc)
