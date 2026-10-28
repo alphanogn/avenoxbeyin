@@ -23,10 +23,12 @@ SYNC_WAIT = 1.5  # seconds the prompt hook waits for the source sync before read
 # not be refreshed. A state that never had an index keeps the #417 failure notice instead.
 STATE_WRITE_REFUSED_NOTE = (
     "V3 state folder is not writable in this client (sandbox or permissions); automatic sync cannot run "
-    "here, so this context comes from the previous index.\n")
+    "here, so this context comes from the previous index. Refresh it by running `beyin.py sync` from a "
+    "client that can write state.\n")
 WORKER_SPAWN_REFUSED_NOTE = (
     "V3 could not start its sync worker in this client (sandbox or permissions); automatic sync cannot "
-    "run here, so this context comes from the previous index.\n")
+    "run here, so this context comes from the previous index. Refresh it by running `beyin.py sync` from "
+    "a client that can write state.\n")
 # Refusals that mean "this client may not write here", not "the sync failed": the existing index is
 # still readable afterwards. A full disk or an I/O error has its own failure path (#417).
 PERMISSION_REFUSALS = frozenset({errno.EPERM, errno.EACCES, errno.EROFS})
@@ -669,7 +671,10 @@ def main():
                 sync_note, due = WORKER_SPAWN_REFUSED_NOTE, False
         # After enqueue, so reminder bookkeeping can never cost the queued checkpoint.
         # The global bridge (--metadata-only) discards stdout, so it keeps no reminder state.
-        reminder = None if args.metadata_only else receipt_reminder(payload, state, args.harness, event, vault=vault)
+        # A refused state write stops the main body before this bookkeeping, so its Stop answers {}
+        # (#417); an earlier edit marker must not reopen that path as a block in a state this client
+        # cannot write. The writable path keeps its reminder untouched.
+        reminder = None if args.metadata_only or sync_note else receipt_reminder(payload, state, args.harness, event, vault=vault)
         if not args.metadata_only and event == 'UserPromptSubmit' and (state / 'chat-trace.json').is_file():
             try:
                 from beyin_v3_chat_trace import hint

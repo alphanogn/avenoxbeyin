@@ -1524,6 +1524,7 @@ class HookReadOnlyStateTest(unittest.TestCase):
         self.assertIn('state folder is not writable', context)
         self.assertIn('previous index', context)
         self.assertEqual(context.count('state folder is not writable'), 1)
+        self.assertIn('`beyin.py sync` from a client that can write state', context)
         self.assertNotIn('failed or conflicted', context)
         self.assertFalse((self.state / 'hook-error.json').exists())
 
@@ -1564,6 +1565,57 @@ class HookReadOnlyStateTest(unittest.TestCase):
                                 'cwd': str(self.vault)})
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout), {})
+
+    @unittest.skipIf(os.name == 'nt' or (hasattr(os, 'geteuid') and os.geteuid() == 0),
+                     'a read-only folder needs POSIX permissions and a non-root user')
+    def test_session_start_in_a_read_only_state_opens_from_the_previous_index(self):
+        # SessionStart takes a different branch from UserPromptSubmit (the companion opening), and a
+        # sandboxed client must get the same one-line note there instead of the #417 failure notice.
+        self.seed()
+        self.deny_state_writes()
+        context = self.context(self.run_hook({'hook_event_name': 'SessionStart', 'session_id': 'ro-session',
+                                              'event_id': 'ro-session-1', 'cwd': str(self.vault)}))
+        self.assertIn('state folder is not writable', context)
+        self.assertIn('previous index', context)
+        self.assertEqual(context.count('state folder is not writable'), 1)
+        self.assertNotIn('V3 source sync failed', context)
+        self.assertFalse((self.state / 'hook-error.json').exists())
+
+    def seed_edit_reminder(self, session_id):
+        """Leave the edited-session marker a PostToolUse writes while the state was still writable."""
+        folder = self.state / 'receipt-reminders'
+        folder.mkdir(parents=True, exist_ok=True)
+        digest = hashlib.sha256(session_id.encode()).hexdigest()
+        (folder / (digest + '.edited')).write_text(json.dumps({'at': time.time()}), encoding='utf-8')
+        return folder, digest
+
+    @unittest.skipIf(os.name == 'nt' or (hasattr(os, 'geteuid') and os.geteuid() == 0),
+                     'a read-only folder needs POSIX permissions and a non-root user')
+    def test_stop_ignores_a_pending_edit_reminder_when_the_state_refuses_writes(self):
+        # A partly read-only state is the case that matters: the state folder refuses the queue write
+        # while receipt-reminders/ still accepts one, so the reminder could turn Stop into a block.
+        # Upstream answers {} for a refused state write (#417) and this path must keep that.
+        self.seed()
+        folder, digest = self.seed_edit_reminder('ro-stop-edited')
+        self.deny_state_writes()
+        result = self.run_hook({'hook_event_name': 'Stop', 'session_id': 'ro-stop-edited',
+                                'event_id': 'ro-stop-edited-1', 'cwd': str(self.vault)})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), {})
+        self.assertTrue((folder / (digest + '.edited')).exists())
+        self.assertFalse((folder / (digest + '.done')).exists())
+
+    def test_stop_still_blocks_a_pending_edit_reminder_in_a_writable_state(self):
+        # The reminder contract itself is untouched: the same marker that stays silent above still
+        # blocks once when the state accepts writes.
+        self.seed()
+        self.seed_edit_reminder('rw-stop-edited')
+        result = self.run_hook({'hook_event_name': 'Stop', 'session_id': 'rw-stop-edited',
+                                'event_id': 'rw-stop-edited-1', 'cwd': str(self.vault)})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        output = json.loads(result.stdout)
+        self.assertEqual(output['decision'], 'block')
+        self.assertIn('Files were edited in this session', output['reason'])
 
     def refused_spawn_hook(self):
         """The real hook where the sandbox refuses to start the sync worker."""
@@ -1630,6 +1682,18 @@ hook.main()
         for code in (errno.ENOSPC, errno.ENOENT, errno.EIO, errno.EBUSY):
             with self.subTest(errno=code):
                 self.assertFalse(hook.permission_refused(OSError(code, os.strerror(code))))
+        # Windows raises these with errno unset (or mapped); a POSIX interpreter can still build the
+        # same object, so the win32 mapping is checked here and in the CI matrix.
+        for winerror in (5, 19):  # ERROR_ACCESS_DENIED, ERROR_WRITE_PROTECT
+            with self.subTest(winerror=winerror):
+                denied = OSError(0, 'synthetic')
+                denied.winerror = winerror
+                self.assertTrue(hook.permission_refused(denied))
+        for winerror in (32, 33):  # ERROR_SHARING_VIOLATION, ERROR_LOCK_VIOLATION
+            with self.subTest(winerror=winerror):
+                transient = OSError(0, 'synthetic')
+                transient.winerror = winerror
+                self.assertFalse(hook.permission_refused(transient))
         self.assertFalse(hook.permission_refused(RuntimeError('synthetic')))
 
 
