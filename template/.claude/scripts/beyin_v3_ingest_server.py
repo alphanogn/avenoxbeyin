@@ -133,7 +133,7 @@ class IngestHandler(BaseHTTPRequestHandler):
     def handle(self):
         try:
             super().handle()
-        except (ConnectionError, socket.timeout, UnicodeError):
+        except (ConnectionError, socket.timeout):
             pass
 
     def _send_json(self, status_code: int, data: dict):
@@ -209,14 +209,14 @@ class IngestHandler(BaseHTTPRequestHandler):
             self.close_connection = True
             self._send_json(411, {"error": "length_required", "message": "Content-Length header required"})
             return
-        
+
         try:
             length = int(cl_header)
         except ValueError:
             self.close_connection = True
             self._send_json(400, {"error": "bad_request", "message": "Invalid Content-Length"})
             return
-            
+
         if length < 0:
             self.close_connection = True
             self._send_json(400, {"error": "bad_request", "message": "Negative Content-Length"})
@@ -225,7 +225,7 @@ class IngestHandler(BaseHTTPRequestHandler):
             self.close_connection = True
             self._send_json(413, {"error": "payload_too_large", "message": "Payload exceeds 1MB limit"})
             return
-            
+
         try:
             raw = self.rfile.read(length)
             if len(raw) != length:

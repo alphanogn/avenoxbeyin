@@ -385,88 +385,55 @@ class IngestServerTest(unittest.TestCase):
 
 
 
-    def test_malformed_utf8_request_line_returns_400(self):
+    def raw_http_client(self):
         import socket
-        import threading
         server = ingest_server.create_server(self.vault, port=0)
-        port = server.server_address[1]
-        t = threading.Thread(target=server.serve_forever, daemon=True)
-        t.start()
-        self.addCleanup(lambda: (server.shutdown(), server.server_close(), t.join(2)))
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(lambda: (server.shutdown(), server.server_close(), thread.join(2)))
 
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.connect(("127.0.0.1", port))
-        
-        # Send raw invalid bytes at the HTTP request boundary.
-        # It should trigger UnicodeDecodeError inside base handle_one_request 
-        # and be caught by our custom handle() which will return 400 Bad Request.
-        s.sendall(b"\xff\xfe\xfa\r\n\r\n")
-        
-        # We must receive a response instead of an abrupt close (empty string).
-        response = b""
-        try:
-            
+        def exchange(payload):
+            with socket.create_connection(('127.0.0.1', server.server_address[1]), timeout=5) as connection:
+                connection.sendall(payload)
+                connection.shutdown(socket.SHUT_WR)
+                response = bytearray()
                 while True:
-                    chunk = s.recv(1024)
-                    if not chunk: break
-                    response += chunk
+                    chunk = connection.recv(4096)
+                    if not chunk:
+                        return bytes(response)
+                    response.extend(chunk)
+        return exchange
 
-        except OSError:
-            pass
-        finally:
-            s.close()
-            
-        self.assertIn(b"400", response)
-
-
+    def test_malformed_utf8_request_line_returns_400(self):
+        # BaseHTTPRequestHandler decodes request lines as Latin-1. Its syntax
+        # validation already rejects these bytes; no UnicodeError catch is needed.
+        response = self.raw_http_client()(b'\xff\xfe\xfa\r\n\r\n')
+        self.assertIn(b'400', response)
+        self.assertFalse(any(self.vault.rglob('*.md')))
 
     def test_malformed_requests_and_content_length_resilience(self):
-        import socket
-        import threading
-        server = ingest_server.create_server(self.vault, port=0)
-        port = server.server_address[1]
-        t = threading.Thread(target=server.serve_forever, daemon=True)
-        t.start()
-        self.addCleanup(lambda: (server.shutdown(), server.server_close(), t.join(2)))
-
-        def send_and_receive(payload):
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.connect(("127.0.0.1", port))
-            s.sendall(payload)
-            response = b""
-            try:
-                
-                while True:
-                    chunk = s.recv(1024)
-                    if not chunk: break
-                    response += chunk
-
-            except OSError:
-                pass
-            finally:
-                s.close()
-            return response
-
-        # 1. Non-numeric Content-Length
-        response = send_and_receive(b"POST /ingest HTTP/1.1\r\nContent-Length: not-a-number\r\n\r\n")
-        self.assertIn(b"400", response)
-        self.assertIn(b"Invalid Content-Length", response)
-
-        # 2. Negative Content-Length
-        response = send_and_receive(b"POST /ingest HTTP/1.1\r\nContent-Length: -50\r\n\r\n")
-        self.assertIn(b"400", response)
-        self.assertIn(b"Negative Content-Length", response)
-
-        # 3. Payload Too Large
-        response = send_and_receive(b"POST /ingest HTTP/1.1\r\nContent-Length: 2000000\r\n\r\n")
-        self.assertIn(b"413", response)
-        self.assertIn(b"Payload exceeds", response)
-
-        # 4. Invalid JSON Payload
-        payload = b'{"text": "incomplete'
-        response = send_and_receive(b"POST /ingest HTTP/1.1\r\nContent-Type: application/json\r\nContent-Length: " + str(len(payload)).encode() + b"\r\n\r\n" + payload)
-        self.assertIn(b"400", response)
-        self.assertIn(b"Malformed JSON", response)
+        exchange = self.raw_http_client()
+        for length, status, message in ((b'not-a-number', b'400', b'Invalid Content-Length'),
+                                        (b'-50', b'400', b'Negative Content-Length'),
+                                        (b'2000000', b'413', b'Payload exceeds')):
+            with self.subTest(length=length):
+                response = exchange(b'POST /ingest HTTP/1.1\r\nContent-Length: ' + length + b'\r\n\r\n')
+                self.assertIn(status, response.split(b'\r\n')[0])
+                self.assertIn(message, response)
+        for payload, message in ((b'{"text": "incomplete', b'Malformed JSON'),
+                                 (b'\xff', b'Invalid UTF-8 payload')):
+            with self.subTest(payload=payload):
+                response = exchange(b'POST /ingest HTTP/1.1\r\nContent-Type: application/json\r\n'
+                                    b'Content-Length: ' + str(len(payload)).encode() + b'\r\n\r\n' + payload)
+                self.assertIn(b'400', response.split(b'\r\n')[0])
+                self.assertIn(message, response)
+        self.assertFalse(any(self.vault.rglob('*.md')))
+        # Explicit plain text remains a supported ingest format.
+        payload = b'{this is plain text'
+        response = exchange(b'POST /ingest HTTP/1.1\r\nContent-Type: text/plain\r\n'
+                            b'Content-Length: ' + str(len(payload)).encode() + b'\r\n\r\n' + payload)
+        self.assertIn(b'201', response.split(b'\r\n')[0])
+        self.assertEqual(len(list(self.vault.rglob('*.md'))), 1)
 
 
 if __name__ == '__main__':
