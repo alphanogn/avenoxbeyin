@@ -55,7 +55,7 @@ def render(vault: Path, platform: str) -> dict[str, Any]:
     destination = vault / ".codex" / "hooks.json"
     try:
         current = json.loads(destination.read_text(encoding="utf-8"))
-    except FileNotFoundError:
+    except (OSError, ValueError):
         current = {}
     if not isinstance(current, dict):
         raise ValueError("codex-hooks-root-not-object")

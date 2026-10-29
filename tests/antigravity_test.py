@@ -221,5 +221,45 @@ class AntigravityTest(unittest.TestCase):
         self.assertEqual(payload2, {"action": "stop"})
 
 
+
+    def test_corrupted_json_and_missing_executable_handling(self) -> None:
+        import beyin_v3_launchers
+        import render_codex_hooks
+        
+        with mock.patch("sys.executable", None):
+            with self.assertRaisesRegex(ValueError, "python-executable-missing"):
+                beyin_v3_launchers.plan_launchers("/tmp/vault", {})
+                
+        with tempfile.TemporaryDirectory() as temporary:
+            vault = Path(temporary) / "vault"
+            scripts = vault / ".claude" / "scripts"
+            scripts.mkdir(parents=True)
+            (scripts / "antigravity_hooks.py").touch()
+            
+            agents = vault / ".agents"
+            agents.mkdir(parents=True)
+            codex = vault / ".codex"
+            codex.mkdir(parents=True)
+            
+            # Test corrupted json
+            (agents / "hooks.json").write_text("{corrupted-json", encoding="utf-8")
+            (codex / "hooks.json").write_text("{corrupted-json", encoding="utf-8")
+            
+            anti_payload = renderer.render(vault, "posix", Path("/usr/bin/python3"))
+            self.assertIn("avenox-beyin", anti_payload)
+            
+            codex_payload = render_codex_hooks.render(vault, "posix")
+            self.assertIn("description", codex_payload)
+            
+            # Test root not dict
+            (agents / "hooks.json").write_text("[1, 2]", encoding="utf-8")
+            (codex / "hooks.json").write_text("[1, 2]", encoding="utf-8")
+            
+            with self.assertRaisesRegex(ValueError, "antigravity-hooks-root-not-object"):
+                renderer.render(vault, "posix", Path("/usr/bin/python3"))
+                
+            with self.assertRaisesRegex(ValueError, "codex-hooks-root-not-object"):
+                render_codex_hooks.render(vault, "posix")
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
