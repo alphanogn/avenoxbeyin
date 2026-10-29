@@ -44,8 +44,10 @@ def render(
     destination = vault / ".agents" / "hooks.json"
     try:
         current = json.loads(destination.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except FileNotFoundError:
         current = {}
+    except ValueError as exc:
+        raise ValueError("antigravity-hooks-invalid-json; existing file preserved") from exc
     if not isinstance(current, dict):
         raise ValueError("antigravity-hooks-root-not-object")
 
