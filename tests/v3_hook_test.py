@@ -1695,6 +1695,23 @@ hook.main()
         self.assertNotIn('state folder is not writable', context)
         self.assertNotIn('Synthetic Reviewer', context)
 
+    @unittest.skipIf(os.name == 'nt' or (hasattr(os, 'geteuid') and os.geteuid() == 0),
+                     'a read-only folder needs POSIX permissions and a non-root user')
+    def test_read_only_fallback_rechecks_revoked_source_visibility(self):
+        self.seed()
+        note = self.vault / 'notes' / 'task.md'
+        note.write_text(note.read_text(encoding='utf-8').replace('"internal"', '"private"'),
+                        encoding='utf-8')
+        self.deny_state_writes()
+        for event in ('SessionStart', 'UserPromptSubmit'):
+            with self.subTest(event=event):
+                context = self.context(self.run_hook({
+                    'hook_event_name': event, 'session_id': 'ro-revoked',
+                    'event_id': 'ro-revoked-' + event, 'cwd': str(self.vault),
+                    'prompt': 'Nebula calibration owner'}))
+                self.assertIn('state folder is not writable', context)
+                self.assertNotIn('Synthetic Reviewer', context)
+
     def test_write_refusal_classification_keeps_other_failures(self):
         # Only the refusals that leave the existing index readable take the read-only path; a full
         # disk, a missing path or a non-OS error must still reach the #417 handler.
