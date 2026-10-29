@@ -110,8 +110,12 @@ class ReferencesTest(unittest.TestCase):
         names a file on another machine is reported rather than skipped."""
         missing = self.vault.parent / 'olmayan' / 'not.md'
         self.assertFalse(missing.exists())
-        self.write('AGENTS.md', '[not](<%s>)\n' % missing.as_posix())
-        self.assertEqual(self.dead(), [('AGENTS.md', 1, missing.as_posix())])
+        # A Windows native path starts with a drive, which has different semantics.
+        # Exercise the documented leading-slash form on every host.
+        target = '/' + missing.relative_to(missing.anchor).as_posix()
+        self.assertTrue(target.startswith('/'))
+        self.write('AGENTS.md', '[not](<%s>)\n' % target)
+        self.assertEqual(self.dead(), [('AGENTS.md', 1, target)])
 
     def test_a_relative_link_that_resolves_to_nothing_is_still_dead(self):
         """Absolute paths are skipped only where they leave the vault; the vault check still works."""
