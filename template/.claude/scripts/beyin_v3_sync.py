@@ -843,7 +843,7 @@ class SyncEngine:
                             records[id] = None
                             continue
                     raw = path.read_bytes()
-                    text = raw.decode('utf-8', errors='surrogatepass')
+                    text = raw.decode('utf-8')
                     if _has_conflict_markers(text):
                         raise ValueError('unresolved git conflict markers; resolve the merge before sync')
                     metadata, body = parse(text)
@@ -935,7 +935,7 @@ class SyncEngine:
         """Rebuild a receipts row from its immutable source; ValueError when the file is not a valid receipt."""
         path = self._path(relative, existing=True)
         # Bytes, not read_text: universal newlines would turn '\r' into '\n' and fake an event id collision.
-        text = path.read_bytes().decode('utf-8', errors='surrogatepass')
+        text = path.read_bytes().decode('utf-8')
         if _has_conflict_markers(text):
             raise ValueError('unresolved git conflict markers; resolve the merge before sync')
         metadata, body = parse(text)
@@ -1116,7 +1116,7 @@ class SyncEngine:
                         record['revision'] = max(record['revision'], previous['revision'] + 1)
                     else:
                         record['revision'] = max(record['revision'], previous['revision'])
-                payload = _json(record).encode('utf-16', 'surrogatepass').decode('utf-16')
+                payload = _json(record)
                 if previous_payload is not None and id not in old_owned and previous_payload != payload:
                     conflicts.append({'id': id, 'reason': 'id already owned by another record'})
                     continue
@@ -1125,7 +1125,7 @@ class SyncEngine:
                     db.execute('INSERT OR REPLACE INTO records VALUES (?,?)', (id, payload))
                     db.execute('INSERT INTO events(event_type,record_id,revision,record) VALUES (?,?,?,?)', (event_type, id, record['revision'], payload))
                 if old_sources.get(id) != record['source']:
-                    db.execute('INSERT OR REPLACE INTO markdown_sources VALUES (?,?)', (id, record['source'].encode('utf-16', 'surrogatepass').decode('utf-16')))
+                    db.execute('INSERT OR REPLACE INTO markdown_sources VALUES (?,?)', (id, record['source']))
                 indexed[id] = payload
             cache.save(indexed)
             # Rebind surviving aliases after a rename and retire a path once
@@ -1228,7 +1228,7 @@ class SyncEngine:
             raw = path.read_bytes()
             if _hash(raw) != record['source_sha256']:
                 raise RevisionConflict('source changed; sync and reread')
-            metadata, body = parse(raw.decode('utf-8', errors='surrogatepass'))
+            metadata, body = parse(raw.decode('utf-8'))
             if metadata.get('id') != id or type(metadata.get('revision')) is not int or metadata['revision'] > expected_revision:
                 raise RevisionConflict('source revision conflict')
             before = {field: metadata.get(field) for field in ('status', 'completion_contract', 'completion_criterion')}
@@ -1474,14 +1474,14 @@ class SyncEngine:
             path = self._path(source)
             if path.exists():
                 # Byte comparison: universal-newline text would call a '\r' summary a manual change.
-                if path.read_bytes() != content.encode('utf-8', errors='surrogatepass'):
+                if path.read_bytes() != content.encode('utf-8'):
                     raise ReceiptConflict('receipt source manually changed')
             else:
                 self._intent(source, None, content, 'receipt', event)
         result = self.sync()
         if self._write_blockers(result, source):
             raise ReceiptConflict('receipt projection conflict')
-        if self._path(source, existing=True).read_bytes() != content.encode('utf-8', errors='surrogatepass'):
+        if self._path(source, existing=True).read_bytes() != content.encode('utf-8'):
             raise ReceiptConflict('receipt source changed before readback')
         self.store.submit_receipt(event_id, summary, refs, event['harness'], links=links)
         self._record_redactions(redacted)

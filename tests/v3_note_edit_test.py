@@ -501,27 +501,35 @@ with locked(engine):
 
 
 
-    def test_cesu8_surrogates_preserved_without_error(self):
-        cesu8_bytes = b'\xed\xa0\xbd\xed\xb8\x8a\n'
-        path = self.vault / 'surrogate.md'
-        path.write_bytes(cesu8_bytes)
-        
-        # note-read should preserve surrogate pass
-        read_res = self.engine.note_read('surrogate.md')
-        
-        # note-edit should preserve bytes and write perfectly
-        request = {
-            'source': 'surrogate.md',
-            'expected_sha256': read_res['sha256'],
-            'edits': [{'old': '\n', 'new': ' appended\n'}]
-        }
-        res = self.engine.note_edit(request)
-        self.assertEqual(res['status'], 'written')
-        self.assertEqual(path.read_bytes(), cesu8_bytes[:-1] + b' appended\n')
+    def test_invalid_utf8_is_rejected_without_changing_source(self):
+        for raw in (b'\xed\xa0\xbd\xed\xb8\x8a\n', b'\xed\xa0\x80\n', b'\xff\n'):
+            with self.subTest(raw=raw):
+                path = self.vault / 'surrogate.md'
+                path.write_bytes(raw)
+                with self.assertRaises(UnicodeDecodeError):
+                    self.engine.note_read('surrogate.md')
+                request = {'source': 'surrogate.md', 'expected_sha256': hashlib.sha256(raw).hexdigest(),
+                           'edits': [{'old': '\n', 'new': ' appended\n'}]}
+                with self.assertRaises(UnicodeDecodeError):
+                    self.engine.note_edit(request)
+                self.assertEqual(path.read_bytes(), raw)
+                result = self.run_cli('note-read', None, 'surrogate.md')
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertEqual(json.loads(result.stdout)['status'], 'error')
+                self.assertNotIn('Traceback', result.stderr)
+                self.assertEqual(path.read_bytes(), raw)
+        self.assertFalse((self.vault / LOCAL_DIRECTORY / 'backups').exists())
+
+    def test_unpaired_surrogate_cannot_create_a_partial_note(self):
+        request = {'source': 'broken.md', 'expected_sha256': None,
+                   'content': 'new lone surrogate \ud800'}
+        with self.assertRaises(UnicodeEncodeError):
+            self.engine.note_edit(request)
+        self.assertFalse((self.vault / 'broken.md').exists())
 
     def test_invalid_timeouts_are_rejected(self):
         from beyin_v3_notes import locked
-        cases = [float('nan'), True, -1, -5.0]
+        cases = [float('nan'), float('inf'), float('-inf'), True, -1, -5.0, '15', None]
         for timeout in cases:
             with self.subTest(timeout=timeout):
                 with self.assertRaises(ValueError):
