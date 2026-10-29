@@ -423,35 +423,29 @@ class ParallelModuleTest(unittest.TestCase):
         self.assertFalse((self.state / '.presence').exists())
 
     def test_continuity_malformed_id_type_error(self):
-        sys.path.insert(0, str(SCRIPTS))
+        from beyin_v3 import MemoryStore
         from beyin_v3_continuity import resolve
-        
-        class DummyStore:
-            def __init__(self, d):
-                self.state_dir = Path(d)
-            def _records(self): return []
-            def _eligible(self, visibility, project, records): return records, []
-            def _superseded_ids(self, records): return set()
 
-        store = DummyStore(self.state)
-        session = 'test-crash'
-        harness = 'claude'
-        
+        vault = self.state.parent / 'continuity-vault'
+        vault.mkdir()
+        store = MemoryStore(self.state, vault)
+        self.addCleanup(store.close)
+        source = vault / 'topic.md'
+        source.write_text('Quartz deployment rollback procedure.', encoding='utf-8')
+        store.ingest(dict(id='topic', source='topic.md', text=source.read_text(encoding='utf-8')))
+        session, harness = 'test-crash', 'claude'
         folder = store.state_dir / 'topic-refs'
         folder.mkdir(parents=True, exist_ok=True)
         digest = hashlib.sha256((harness + '\0' + session).encode()).hexdigest()
         path = folder / (digest + '.json')
-        
-        path.write_text(json.dumps({
-            "version": 1,
-            "at": time.time(),
-            "project": None,
-            "refs": [{"id": ["list", "unhashable"]}]
-        }))
-        
-        local = "local"
-        res = resolve(store, harness, session, "bunu devam ettir", local, budget_chars=1000)
-        self.assertEqual(res, (local, False))
+        for ident in (['list', 'unhashable'], {'id': 'topic'}, None, 1, True, ''):
+            with self.subTest(ident=ident):
+                path.write_text(json.dumps(dict(version=1, at=time.time(), project=None,
+                                                refs=[{'id': ident}])), encoding='utf-8')
+                before = path.read_bytes()
+                self.assertEqual(resolve(store, harness, session, 'bunu devam ettir',
+                                         'local', budget_chars=1000), ('local', False))
+                self.assertEqual(path.read_bytes(), before)
 
 
 if __name__ == '__main__':

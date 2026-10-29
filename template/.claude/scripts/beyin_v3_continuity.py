@@ -59,7 +59,8 @@ def _read(path, now):
 
 
 def _current(store, saved):
-    if any(not isinstance(ref, dict) for ref in saved['refs']):
+    if any(not isinstance(ref, dict) or not isinstance(ref.get('id'), str)
+           or not ref['id'] for ref in saved['refs']):
         return []
     indexed = store._records()
     # Verify only the saved refs, through the same gates _retrieve applies to an empty
@@ -101,7 +102,7 @@ def resolve(store, harness, session, query, local, *, budget_chars, project=None
         return local, False
     try:
         records = _current(store, saved)
-    except (ValueError, OSError, TypeError):
+    except (ValueError, OSError):
         return local, False
     if not records:
         return local, False
