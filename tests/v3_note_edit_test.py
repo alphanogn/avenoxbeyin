@@ -500,5 +500,33 @@ with locked(engine):
             self.engine.note_edit({'source': '🔐 Kasa/Gizli.md', 'expected_sha256': None, 'content': '# X'})
 
 
+
+    def test_cesu8_surrogates_preserved_without_error(self):
+        cesu8_bytes = b'\xed\xa0\xbd\xed\xb8\x8a\n'
+        path = self.vault / 'surrogate.md'
+        path.write_bytes(cesu8_bytes)
+        
+        # note-read should preserve surrogate pass
+        read_res = self.engine.note_read('surrogate.md')
+        
+        # note-edit should preserve bytes and write perfectly
+        request = {
+            'source': 'surrogate.md',
+            'expected_sha256': read_res['sha256'],
+            'edits': [{'old': '\n', 'new': ' appended\n'}]
+        }
+        res = self.engine.note_edit(request)
+        self.assertEqual(res['status'], 'written')
+        self.assertEqual(path.read_bytes(), cesu8_bytes[:-1] + b' appended\n')
+
+    def test_invalid_timeouts_are_rejected(self):
+        from beyin_v3_notes import locked
+        cases = [float('nan'), True, -1, -5.0]
+        for timeout in cases:
+            with self.subTest(timeout=timeout):
+                with self.assertRaises(ValueError):
+                    with locked(self.engine, timeout=timeout):
+                        pass
+
 if __name__ == '__main__':
     unittest.main()

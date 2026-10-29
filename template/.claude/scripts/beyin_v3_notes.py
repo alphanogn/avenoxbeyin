@@ -163,6 +163,12 @@ def vault_locked(vault, timeout=15):
     Order: note lock -> optional companion lock -> database transaction.
     Recovery already holding the DB may only try this lock with timeout=0.
     """
+    import math
+    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
+        raise ValueError('timeout must be a number')
+    timeout = float(timeout)
+    if math.isnan(timeout) or timeout < 0:
+        raise ValueError('timeout must be non-negative')
     vault = Path(vault).resolve()
     # Recovery can run inside note-create/note-edit's sync. Reuse only this
     # thread's lock; a forked child and other threads still need their own OS lock.
@@ -257,7 +263,7 @@ def read(engine, source):
         source = path.relative_to(engine.root).as_posix()
         _refuse_tracked_view(engine, source)
         raw = _bytes(path)
-        text = raw.decode('utf-8') if raw is not None else None
+        text = raw.decode('utf-8', errors='surrogatepass') if raw is not None else None
         if text is not None:
             _human(text)
     return {'source': source, 'sha256': _hash(raw) if raw is not None else None,
@@ -303,7 +309,7 @@ def _apply(engine, request, committed):
         else:
             if 'content' in request or not isinstance(request.get('edits'), list) or not request['edits']:
                 raise ValueError('existing source requires nonempty targeted edits, not content')
-            text = raw.decode('utf-8')
+            text = raw.decode('utf-8', errors='surrogatepass')
             _human(text)
             for edit in request['edits']:
                 if not isinstance(edit, dict):
@@ -316,7 +322,7 @@ def _apply(engine, request, committed):
                     raise NoteConflict('edit anchor must occur exactly once')
                 text = text.replace(old, new, 1)
         _human(text)  # Do not create a managed source or convert a human note into one.
-        updated = text.encode('utf-8')  # Keeps BOM and untouched CRLF bytes exactly.
+        updated = text.encode('utf-8', errors='surrogatepass')  # Keeps BOM and untouched CRLF bytes exactly.
         if updated == raw:
             return {'status': 'unchanged', 'source': source, 'sha256': actual}
         # Preserve the exact requested bytes. With the opt-in filter enabled,
