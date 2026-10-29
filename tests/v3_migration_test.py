@@ -619,5 +619,20 @@ class MigrationTest(unittest.TestCase):
             shutil.copyfile = original_copyfile
 
 
+    def test_guard_plan_handles_invalid_install_manifest(self):
+        self.state.mkdir(parents=True, exist_ok=True)
+        # Test 1: Array (not a dict)
+        (self.state / 'v3-install.json').write_text('["not a dict"]', encoding='utf-8')
+        with self.m.migration_guard(self.root, self.state) as plan:
+            self.assertNotIn('kept_legacy', plan)
+        # Test 2: kept_legacy is null
+        (self.state / 'v3-install.json').write_text('{"kept_legacy": null}', encoding='utf-8')
+        with self.m.migration_guard(self.root, self.state) as plan:
+            self.assertNotIn('kept_legacy', plan)
+        # Test 3: kept_legacy is dict/int
+        (self.state / 'v3-install.json').write_text('{"kept_legacy": 123}', encoding='utf-8')
+        with self.m.migration_guard(self.root, self.state) as plan:
+            self.assertNotIn('kept_legacy', plan)
+
 if __name__ == '__main__':
     unittest.main()
