@@ -613,7 +613,8 @@ def summary(samples, details):
     ordered = sorted(samples)
     # Nearest rank p95: reproducible for small N, no interpolated pseudo-samples.
     return dict(n=len(samples), median_ms=statistics.median(samples) if samples else None,
-                p95_ms=ordered[max(0, math.ceil(0.95 * len(ordered)) - 1)] if ordered else None, min_ms=min(samples) if samples else None,
+                p95_ms=ordered[math.ceil(0.95 * len(ordered)) - 1] if ordered else None,
+                min_ms=min(samples) if samples else None,
                 max_ms=max(samples) if samples else None, samples_ms=samples, details=details)
 
 
@@ -686,7 +687,9 @@ def report(path):
     print('| scenario | n | median ms | p95 ms | min | max |')
     print('| --- | ---: | ---: | ---: | ---: | ---: |')
     for name, row in result['scenarios'].items():
-        print(f"| {name} | {row['n']} | {row['median_ms']:.2f} | {row['p95_ms']:.2f} | {row['min_ms']:.2f} | {row['max_ms']:.2f} |")
+        values = ['n/a' if row[key] is None else f'{row[key]:.2f}'
+                  for key in ('median_ms', 'p95_ms', 'min_ms', 'max_ms')]
+        print(f"| {name} | {row['n']} | " + ' | '.join(values) + ' |')
 
 
 def positive_int(value):

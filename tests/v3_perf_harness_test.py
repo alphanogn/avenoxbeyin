@@ -132,6 +132,10 @@ class PerfHarnessTest(unittest.TestCase):
         self.assertIsNone(result['p95_ms'])
         self.assertIsNone(result['min_ms'])
         self.assertIsNone(result['max_ms'])
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / 'empty-results.json'
+            path.write_text(json.dumps({'scenarios': {'empty': result}}), encoding='utf-8')
+            self.assertIn('| empty | 0 | n/a | n/a | n/a | n/a |', self.invoke('report', path))
 
 
     def test_evaluate_v3_decisions_percentile_empty(self):

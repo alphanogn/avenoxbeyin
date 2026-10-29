@@ -30,8 +30,6 @@ def percentile(values, fraction):
 
 
 def summarize(rows):
-    if not rows:
-        return dict(samples=0, unique_cases=0, required=0, hits=0, delivered=0, missed=0, extraneous=0, recall=None, precision=None, candidate_exposure_recall=None, exact_sets=0, abstention_accuracy=None, invalid_envelopes=0, forbidden_delivered=0, local_only_sent=0, stub_transport_calls=0, fallback_count=0, cache_hits=0, p50_e2e_ms=None, p95_e2e_ms=None, live_provider_calls=0, model_latency_ms=None, input_tokens=None, provider_cost_usd=None)
     required = sum(len(row['expected']) for row in rows)
     delivered = sum(len(row['delivered']) for row in rows)
     hits = sum(len(set(row['expected']) & set(row['delivered'])) for row in rows)

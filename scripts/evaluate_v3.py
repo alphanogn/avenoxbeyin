@@ -119,8 +119,6 @@ def score_case(module, store, case, fixture_by_id):
 
 
 def aggregate(rows):
-    if not rows:
-        return {'cases': 0, 'passed_cases': 0, 'recall_at_5': None, 'precision_at_5_diagnostic': None, 'forbidden_count': 0, 'abstention_accuracy': None, 'structured_fact_retention': None, 'privacy_canary_leaks': 0, 'harness_equivalence': True, 'passed': False}
     required = sum(r['required_count'] for r in rows)
     facts = sum(r['facts_total'] for r in rows)
     return {
