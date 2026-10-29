@@ -426,9 +426,12 @@ class ParallelModuleTest(unittest.TestCase):
         from beyin_v3 import MemoryStore
         from beyin_v3_continuity import resolve
 
-        vault = self.state.parent / 'continuity-vault'
+        temporary = tempfile.TemporaryDirectory(prefix='v3-continuity-invalid-id-')
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        vault = root / 'vault'
         vault.mkdir()
-        store = MemoryStore(self.state, vault)
+        store = MemoryStore(root / 'state', vault)
         self.addCleanup(store.close)
         source = vault / 'topic.md'
         source.write_text('Quartz deployment rollback procedure.', encoding='utf-8')
