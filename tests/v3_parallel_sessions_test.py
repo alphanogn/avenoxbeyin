@@ -422,6 +422,31 @@ class ParallelModuleTest(unittest.TestCase):
         self.assertFalse((self.state / 'parallel-presence-device.json').exists())
         self.assertFalse((self.state / '.presence').exists())
 
+    def test_continuity_malformed_id_type_error(self):
+        from beyin_v3 import MemoryStore
+        from beyin_v3_continuity import resolve
+
+        vault = self.state.parent / 'continuity-vault'
+        vault.mkdir()
+        store = MemoryStore(self.state, vault)
+        self.addCleanup(store.close)
+        source = vault / 'topic.md'
+        source.write_text('Quartz deployment rollback procedure.', encoding='utf-8')
+        store.ingest(dict(id='topic', source='topic.md', text=source.read_text(encoding='utf-8')))
+        session, harness = 'test-crash', 'claude'
+        folder = store.state_dir / 'topic-refs'
+        folder.mkdir(parents=True, exist_ok=True)
+        digest = hashlib.sha256((harness + '\0' + session).encode()).hexdigest()
+        path = folder / (digest + '.json')
+        for ident in (['list', 'unhashable'], {'id': 'topic'}, None, 1, True, ''):
+            with self.subTest(ident=ident):
+                path.write_text(json.dumps(dict(version=1, at=time.time(), project=None,
+                                                refs=[{'id': ident}])), encoding='utf-8')
+                before = path.read_bytes()
+                self.assertEqual(resolve(store, harness, session, 'bunu devam ettir',
+                                         'local', budget_chars=1000), ('local', False))
+                self.assertEqual(path.read_bytes(), before)
+
 
 if __name__ == '__main__':
     unittest.main()
