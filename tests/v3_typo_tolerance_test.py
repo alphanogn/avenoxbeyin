@@ -29,12 +29,12 @@ class TypoToleranceTest(unittest.TestCase):
         self.ingest('grocery', GROCERY, 'notes/alisveris.md')
         self.ingest('board', BOARD, 'notes/kurul.md')
 
-    def ingest(self, id, text, source):
+    def ingest(self, id, text, source, **metadata):
         path = self.vault / source
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding='utf-8')
         self.store.ingest({'id': id, 'kind': 'note', 'status': 'active', 'visibility': 'internal',
-                           'text': text, 'facts': {}, 'source': source, 'updated_at': '2026-10-29T10:00:00Z'})
+                           'text': text, 'facts': {}, 'source': source, 'updated_at': '2026-10-29T10:00:00Z', **metadata})
 
     def sources(self, query, **kwargs):
         return [c['source'] for c in self.store.retrieve(query, **kwargs)['citations']]
@@ -50,6 +50,23 @@ class TypoToleranceTest(unittest.TestCase):
 
     def test_strict_mode_does_not_guess(self):
         self.assertEqual(self.sources('cluade ankeit zmana', strict=True), [])
+
+    def test_typo_candidates_keep_visibility_trust_status_and_freshness_gates(self):
+        query = 'cluade ankeit zmana'
+        for name, metadata in (
+                ('private', {'visibility': 'private'}),
+                ('untrusted', {'trust': 'untrusted'}),
+                ('archived', {'status': 'archived'})):
+            self.ingest(name, CALENDAR, f'notes/{name}.md', **metadata)
+        self.ingest('stale', CALENDAR, 'notes/stale.md')
+        (self.vault / 'notes/stale.md').write_text('Replaced source.', encoding='utf-8')
+        self.assertEqual(self.sources(query), ['knowledge/takvim.md'])
+        self.assertEqual(self.sources(query, audience='public'), [])
+
+    def test_typo_candidates_cannot_cross_an_explicit_project(self):
+        self.ingest('other', CALENDAR, 'notes/other-project.md', project='other')
+        self.assertEqual(self.sources('cluade ankeit zmana', project='other'),
+                         ['notes/other-project.md'])
 
 
 if __name__ == '__main__':
