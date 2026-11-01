@@ -700,9 +700,11 @@ def context(store, budget, session, harness, query='', receipt='', warning='', p
     records = snapshot['records']
     notice = ''
     missing = snapshot['missing_sources']
-    if IDENTITY & {Path(r['source']).name for r in records}:
+    kept = {name for name in IDENTITY if (target / name).is_file()}
+    if kept:
         # Core.md and Soul.md are alternatives: setup creates Core.md, a V2 vault keeps Soul.md.
-        missing = [name for name in missing if name not in IDENTITY]
+        # Drop only the one the vault does not keep; a kept one that is excluded stays listed.
+        missing = [name for name in missing if name in kept or name not in IDENTITY]
     if missing:
         notice += 'Missing/unavailable companion sources: ' + ', '.join(missing) + '.\n'
     if snapshot['stale_excluded']:

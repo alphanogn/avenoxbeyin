@@ -49,12 +49,17 @@ class IdentityNoticeTest(unittest.TestCase):
     def test_both_identity_files_missing_are_still_reported(self):
         for name in ('Kurallar.md', 'Last-Session.md', 'Threads.md', 'Journal.md'):
             self.write(name, f'# {name}\nSynthetic {name} body.\n')
-        self.assertIn('Core.md', self.notice())
-        self.assertIn('Soul.md', self.notice())
+        self.assertEqual(self.notice(), NOTICE + ' Core.md, Soul.md.')
 
     def test_other_missing_files_are_still_reported(self):
         self.write('Core.md', '# Core\nSynthetic body.\n')
         self.assertEqual(self.notice(), NOTICE + ' Kurallar.md, Last-Session.md, Threads.md, Journal.md.')
+
+    def test_changed_core_is_listed_without_soul(self):
+        # A Core.md edited after the last sync is excluded as stale; Soul.md was never expected.
+        self.seed('Core.md')
+        (self.vault / DIRECTORY / 'Core.md').write_text('# Core.md\nEdited after sync.\n', encoding='utf-8')
+        self.assertEqual(self.notice(), NOTICE + ' Core.md.')
 
 
 if __name__ == '__main__':
